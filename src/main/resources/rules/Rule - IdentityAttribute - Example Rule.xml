@@ -3,38 +3,120 @@
 <Rule name="Example Rule" type="IdentityAttribute">
   <Description>Calculates LCS based on start and end dates.</Description>
   <Source><![CDATA[
-import java.text.SimpleDateFormat;
-import java.util.Date;
+	
+		import java.util.ArrayList;
+		import java.util.HashSet;
+		import java.util.Iterator;
+		import java.util.List;
 
-// Date format we expect dates to be in (ISO8601)
-SimpleDateFormat dateFormat = new SimpleDateFormat( "yyyy-MM-dd" );
 
-// Parse the start date from the identity, and put in a Date object.
-Date startDate = null;
-if ( identity.getAttribute( "startDate" ) != null ) {
-  startDate = dateFormat.parse( identity.getAttribute( "startDate" ) );
-}
+		import org.apache.log4j.Logger;
 
-// Parse the end date from the identity, and put in a Date object.
-Date endDate = null;
-if ( identity.getAttribute( "endDate" ) != null ) {
-  endDate = dateFormat.parse( identity.getAttribute( "endDate" ) );
-}
+		import sailpoint.api.SailPointContext;
+		import sailpoint.object.Attributes;
+		import sailpoint.object.Filter;
+		import sailpoint.object.Identity;
+		import sailpoint.tools.GeneralException;
+		import sailpoint.tools.Util;
+		import sailpoint.object.Link;
+		import sailpoint.object.QueryOptions;
+		
+		log.debug("Entering Concatenate All Addresses");
 
-// Define a date for today
-Date today = new Date();
+		// List of AD Attributes to be used form email data retrieval
+		String[] ATTRIBUTES = { "proxyAddresses","mail", "userPrincipalName" };
+		HashSet mailSet = new HashSet();
 
-// Calculate lifecycle state based on the attributes.
-if ( startDate.after(today) && endDate.after(today)) {
-  return "prehire";
-} else if( startDate.before( today ) && endDate.after( today ) ) {
-  return "active";
-} else if ( endDate.before( today ) ) {
-  return "inactive";
-}
+		// this attribute will be returned, used as placeHolder for the prefix
+		// that user has for uniquness check purpose
 
-// If we haven't calculated a state already, return null.
-return null;
+		String concactedEmails = "";
+
+		// backend source name of AD application source name
+		String AD_SOURCE = "AD Zeus [source]";
+
+		log.debug("identity:" + identity);
+		if (identity != null) {
+
+			/*
+			 * Search user based on
+			 * 
+			 * Identity name passed within the context
+			 * 
+			 * And get the user's proxyAddress value , noted the proxyAddress is
+			 * a list object
+			 */
+			List appList = new ArrayList();
+			QueryOptions qo = new QueryOptions();
+			appList.add(Filter.eq("application.name", AD_SOURCE));
+			Filter identityFilter = Filter.eq("identity.name", identity.getName());
+
+			// we need to search for user's that has AD account associated with
+			Filter sourceFilter = Filter.and(identityFilter, Filter.or(appList));
+			qo.addFilter(sourceFilter);
+
+			Iterator it = context.search(Link.class, qo);
+			log.debug("it:" + it);
+
+			Link link = null;
+			while (it != null && it.hasNext()) {
+				link = (Link) it.next();
+				log.debug("link:" + link);
+				if (link != null) {
+					for (String attribute : ATTRIBUTES) {
+						Object attr = link.getAttribute(attribute);
+						log.debug("attr:" + attr);
+						if (attr != null) {
+							if (attr instanceof List) {
+								List attrList = (List) attr;
+								for (String s : attrList) {
+									// Add proxy address prefixes filter to
+									// exclude non-email proxy addresses such as
+									// x.500:
+									log.debug("list s:" + s);
+									if ((s.startsWith("smtp") || s.startsWith("SMTP") || s.startsWith("sip"))
+											&& s.contains("@")) {
+										mailSet.add(s.substring(s.indexOf(":") + 1, s.indexOf("@") + 1).toLowerCase());
+									}
+								}
+							}
+							if (attr instanceof String) {
+								String s = (String) attr;
+								log.debug("s:" + s);
+								if ((s.startsWith("smtp") || s.startsWith("SMTP") || s.startsWith("sip"))
+										&& s.contains("@")) {
+									mailSet.add(s.substring(s.indexOf(":") + 1, s.indexOf("@") + 1).toLowerCase());
+								} else if (s.contains("@")) {
+								//add this code to handle the logic that not for proxyAddress 
+								// but we also need to look at mail/ userprinciple name attribute which has a type of string 
+		                        	mailSet.add(s.substring(0, s.indexOf("@") + 1).toLowerCase());
+		                        }
+							}
+						}
+					}
+				}
+			}
+
+			if (mailSet != null && mailSet.size() != 0) {
+				log.debug("got mailSet");
+				List mailList = new ArrayList(mailSet);
+				concactedEmails = Util.listToCsv(mailList);
+			}
+
+			// This is going to be a value of searchable attribute, therefore
+			// its value can not be more than 450 characters long.
+			if (concactedEmails != null && concactedEmails.length() > 450) {
+				log.debug("trim concactedEmails");
+				concactedEmails = concactedEmails.substring(0, 449);
+			}
+		}
+
+		log.debug("concactedEmails:" + concactedEmails);
+		log.debug("Exiting Concatenate All Addresses");
+
+		return concactedEmails;
+	
+
 
   ]]></Source>
 </Rule>
